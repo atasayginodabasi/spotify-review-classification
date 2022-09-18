@@ -2,6 +2,8 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.figure_factory as ff
+from keras_preprocessing.sequence import pad_sequences
+from keras_preprocessing.text import Tokenizer
 from nltk.tokenize import word_tokenize
 from nltk.util import ngrams
 from nltk.corpus import stopwords
@@ -18,7 +20,15 @@ from xgboost import XGBClassifier
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score
 from sklearn.model_selection import cross_validate
 import warnings
+import tensorflow as tf
+from keras import layers
 import lightgbm as lgb
+from keras.layers import Dense, Dropout, Bidirectional
+from keras.layers import LSTM
+from keras.models import Sequential
+from keras.layers import Bidirectional
+from keras.layers import Embedding
+from keras.layers import GlobalAvgPool1D
 
 warnings.filterwarnings(action='ignore', category=UserWarning)
 
@@ -594,6 +604,7 @@ tf_idf_vector_test = tf_idf_model.transform(X_test)
 # ----------------------------------------------------------------------------------------------------------------------
 
 # Model Creation: Random Forest Classifier
+'''''''''
 rf = RandomForestClassifier(max_depth=60, min_samples_leaf=5,
                             min_samples_split=6, n_estimators=60, oob_score=True,
                             max_leaf_nodes=55, random_state=13)
@@ -637,10 +648,12 @@ fig.update_traces(marker=dict(line=dict(color='#000000', width=0.75)), texttempl
 fig.update_layout({'plot_bgcolor': 'rgba(0, 0, 0, 0)'})
 fig.update_yaxes(range=[0.75, 0.85])
 fig.show()
+'''''''''
 
 # ----------------------------------------------------------------------------------------------------------------------
 
 # Model Creation: XGBClassifier
+'''''''''
 XGB = XGBClassifier(learning_rate=0.005, max_depth=10, n_estimators=30,
                     colsample_bytree=0.3, min_child_weight=0.5, reg_alpha=0.3, random_state=13)
 XGB.fit(tf_idf_vector_train, y_train)
@@ -684,10 +697,12 @@ fig.update_traces(marker=dict(line=dict(color='#000000', width=0.75)), texttempl
 fig.update_layout({'plot_bgcolor': 'rgba(0, 0, 0, 0)'})
 fig.update_yaxes(range=[0.75, 0.85])
 fig.show()
+'''''''''
 
 # ----------------------------------------------------------------------------------------------------------------------
 
 # Model Creation: Logistic Regression
+'''''''''
 lr = LogisticRegression(random_state=13, max_iter=2000).fit(tf_idf_vector_train, y_train)
 
 predictions_LR_test = pd.Series(lr.predict(tf_idf_vector_test))
@@ -729,10 +744,12 @@ fig.update_traces(marker=dict(line=dict(color='#000000', width=0.75)), texttempl
 fig.update_layout({'plot_bgcolor': 'rgba(0, 0, 0, 0)'})
 # fig.update_yaxes(range=[0.75, 0.85])
 fig.show()
+'''''''''
 
 # ----------------------------------------------------------------------------------------------------------------------
 
 # Model Creation: LightGBM
+'''''''''
 lgb = lgb.LGBMClassifier().fit(tf_idf_vector_train, y_train)
 
 predictions_LGB_test = pd.Series(lgb.predict(tf_idf_vector_test))
@@ -774,5 +791,161 @@ fig.update_traces(marker=dict(line=dict(color='#000000', width=0.75)), texttempl
 fig.update_layout({'plot_bgcolor': 'rgba(0, 0, 0, 0)'})
 fig.update_yaxes(range=[0.84, 0.865])
 fig.show()
+'''''''''
+
+# ----------------------------------------------------------------------------------------------------------------------
+
+# Model Creation: Sequential Model (BiDirectional LSTM)
+
+# Train Validation set Split
+X_train, X_val, y_train, y_val = train_test_split(X_train,
+                                                  y_train,
+                                                  test_size=0.25,
+                                                  random_state=13)
+
+print(f"X_train Shape:{X_train.shape}")
+print(f"X_val Shape: {X_val.shape}")
+print(f"X_test Shape: {X_test.shape}")
+
+# --------------------
+
+# Tokenizing with Tensorflow
+num_words = 10000
+
+# Define Tokenizer and fit it with the X_train
+tokenizer = Tokenizer(num_words=num_words, oov_token='<OOV>')
+tokenizer.fit_on_texts(X_train)
+
+# Apply the Tokenizer
+Tokenized_train = tokenizer.texts_to_sequences(X_train)
+Tokenized_val = tokenizer.texts_to_sequences(X_val)
+
+print('Non-tokenized Version: ', X_train[0])
+print('Tokenized Version: ', tokenizer.texts_to_sequences([X_train[0]]))
+print('--' * 20)
+print('Non-tokenized Version: ', X_train[54650])
+print('Tokenized Version: ', tokenizer.texts_to_sequences([X_train[54650]]))
+
+# --------------------
+
+# Applying Padding
+maxLen = 50
+Padded_train = pad_sequences(Tokenized_train, maxlen=maxLen, padding='post')
+Padded_val = pad_sequences(Tokenized_val, maxlen=maxLen, padding='post')
+
+# --------------------
+
+# Creating the Model
+model = Sequential()
+
+model.add(Embedding(num_words, 64, input_length=maxLen))
+model.add(Dropout(0.75))
+
+# model.add(tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(16, activation='relu', return_sequences=True)))
+# model.add(Dropout(0.3))
+
+model.add(tf.keras.layers.BatchNormalization())
+model.add(tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(8, activation='relu')))
+model.add(Dropout(0.5))
+
+model.add(Dense(2, activation='softmax'))
+
+model.summary()
+
+# --------------------
+
+label_ = {"Bad": 0, "Good": 1}
+y_train = y_train.replace(label_)
+y_val = y_val.replace(label_)
+y_test = y_test.replace(label_)
+
+# --------------------
+
+model.compile(loss='sparse_categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+early_stopping = tf.keras.callbacks.EarlyStopping(monitor='val_accuracy',
+                                                  mode='auto', patience=5,
+                                                  restore_best_weights=True)
+
+epochs = 50
+hist = model.fit(Padded_train, y_train, batch_size=64, epochs=epochs,
+                 validation_data=(Padded_val, y_val),
+                 callbacks=[early_stopping])
+
+# --------------------
+
+# Train and Validation Loss Graphs
+fig = go.Figure()
+fig.add_trace(go.Scatter(y=hist.history['loss'],
+                         mode='lines',
+                         name=f"Train Loss", line=dict(width=2)))
+
+fig.add_trace(go.Scatter(y=hist.history['val_loss'],
+                         mode='lines',
+                         name=f"Validation Loss", line=dict(width=2)))
+
+fig.update_layout(
+    yaxis=dict(title_text="Loss", titlefont=dict(size=15)),
+    xaxis=dict(title_text="Epochs", titlefont=dict(size=15)),
+    title={'text': f"Train and Validation Loss Graphs",
+           'x': 0.5})
+fig.update_traces(marker=dict(line=dict(color='#000000', width=0.75)))
+fig.update_layout({'plot_bgcolor': 'rgba(0, 0, 0, 0)'})
+fig.show()
+
+# ----------------------------------------------------------------------------------------------------------------------
+
+# Preparing the Test Data
+Tokenized_test = tokenizer.texts_to_sequences(X_test)
+Padded_test = pad_sequences(Tokenized_test, maxlen=maxLen, padding='post')
+
+# Evaluating the Test Data
+model.evaluate(Padded_test, y_test)
+
+# ----------------------------------------------------------------------------------------------------------------------
+
+# Classification Report for Test Data
+y_test_prediction = model.predict(Padded_test).argmax(axis=1)
+print(classification_report(y_test, y_test_prediction))
+
+# ----------------------------------------------------------------------------------------------------------------------
+
+# Visualise the Word Embeddings
+'''''''''
+# Get the index-word dictionary
+reverse_word_index = tokenizer.index_word
+
+# Get the embedding layer from the model (i.e. first layer)
+embedding_layer = model.layers[0]
+
+# Get the weights of the embedding layer
+embedding_weights = embedding_layer.get_weights()[0]
+
+# Print the shape. Expected is (vocab_size, embedding_dim)
+print(embedding_weights.shape)
+
+import io
+
+# Open writeable files
+out_v = io.open('vecs.tsv', 'w', encoding='utf-8')
+out_m = io.open('meta.tsv', 'w', encoding='utf-8')
+
+# Initialize the loop. Start counting at `1` because `0` is just for the padding
+for word_num in range(1, maxLen):
+    # Get the word associated at the current index
+    word_name = reverse_word_index[word_num]
+
+    # Get the embedding weights associated with the current index
+    word_embedding = embedding_weights[word_num]
+
+    # Write the word name
+    out_m.write(word_name + "\n")
+
+    # Write the word embedding
+    out_v.write('\t'.join([str(x) for x in word_embedding]) + "\n")
+
+# Close the files
+out_v.close()
+'''''''''
 
 # ----------------------------------------------------------------------------------------------------------------------
