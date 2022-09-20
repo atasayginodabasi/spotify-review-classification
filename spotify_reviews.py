@@ -29,12 +29,14 @@ from keras.models import Sequential
 from keras.layers import Bidirectional
 from keras.layers import Embedding
 from keras.layers import GlobalAvgPool1D
+import keras_tuner
 
 warnings.filterwarnings(action='ignore', category=UserWarning)
 
 # ----------------------------------------------------------------------------------------------------------------------
 
 data = pd.read_csv('C:/Users/ata-d/OneDrive/Masaüstü/ML/Datasets/spotify_reviews.csv')
+
 
 # ----------------------------------------------------------------------------------------------------------------------
 
@@ -949,3 +951,35 @@ out_v.close()
 '''''''''
 
 # ----------------------------------------------------------------------------------------------------------------------
+
+
+# Trying KerasTuner
+def create_model(hp):
+    model_tuner = Sequential()
+
+    model_tuner.add(Embedding(num_words, hp.Choice("output_dim", values=[8, 16, 32, 64]), input_length=maxLen))
+    model_tuner.add(Dropout(0.75))
+
+    model_tuner.add(tf.keras.layers.BatchNormalization())
+    model_tuner.add(tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(hp.Choice('num_units', values=[8, 12, 16, 32]),
+                                                                       activation='relu')))
+    model_tuner.add(Dropout(0.5))
+
+    model_tuner.add(Dense(2, activation='softmax'))
+
+    model_tuner.compile(loss='sparse_categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+    return model_tuner
+
+
+tuner = keras_tuner.BayesianOptimization(
+    create_model,
+    objective='val_loss',
+    max_trials=15, overwrite=True)
+
+early_stopping = tf.keras.callbacks.EarlyStopping(monitor='val_accuracy',
+                                                  mode='auto', patience=5,
+                                                  restore_best_weights=True)
+
+tuner.search(Padded_train, y_train, epochs=20, validation_data=(Padded_val, y_val), callbacks=[early_stopping])
+best_model = tuner.get_best_models()[0]
